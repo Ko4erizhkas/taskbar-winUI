@@ -1,0 +1,18 @@
+# Сборка
+build/
+bin/
+obj/
+x64/
+ARM64/
+Debug/
+Release/
+Generated Files/
+packages/
+*.binlog
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.aps
+*.vcxproj.filters.user
