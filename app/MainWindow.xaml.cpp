@@ -107,6 +107,9 @@ namespace winrt::BarKit::implementation
         m_settings = barkit::LoadSettings();
         LoadIntoControls();
         m_ready = true;
+
+        FillMediaSources();
+        WatchMediaSources();
     }
 
     // ---------------------------------------------------------------- настройки <-> элементы управления
@@ -195,11 +198,148 @@ namespace winrt::BarKit::implementation
         OpacitySlider().IsEnabled(tinted);
 
         const bool media = MediaToggle().IsOn();
+        MediaSourceBox().IsEnabled(media);
         MediaPositionBox().IsEnabled(media);
         MediaOffsetBox().IsEnabled(media);
         MediaWidthSlider().IsEnabled(media);
         MediaArtToggle().IsEnabled(media);
         MediaControlsToggle().IsEnabled(media);
+    }
+
+    // ---------------------------------------------------------------- выбор медиа-приложения
+
+    namespace
+    {
+        // Понятное имя по AppUserModelId: «Spotify» вместо «SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify».
+        std::wstring FriendlyAppName(std::wstring const& id)
+        {
+            try
+            {
+                const auto info = Windows::ApplicationModel::AppInfo::GetFromAppUserModelId(id);
+                if (info)
+                {
+                    const auto name = info.DisplayInfo().DisplayName();
+                    if (!name.empty())
+                    {
+                        return std::wstring(name);
+                    }
+                }
+            }
+            catch (...)
+            {
+                // Для обычных (не из Магазина) программ система имя может не знать.
+            }
+
+            std::wstring name = id;
+            if (name.size() > 4 && _wcsicmp(name.c_str() + name.size() - 4, L".exe") == 0)
+            {
+                name.resize(name.size() - 4);
+            }
+            return name;
+        }
+    }
+
+    winrt::fire_and_forget MainWindow::WatchMediaSources()
+    {
+        auto lifetime = get_strong();
+        try
+        {
+            using Manager = Windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
+            m_mediaManager = co_await Manager::RequestAsync();
+
+            // Событие приходит из фонового потока — список обновляем в потоке окна.
+            auto queue = DispatcherQueue();
+            auto weak = get_weak();
+            m_sessionsChangedToken = m_mediaManager.SessionsChanged([queue, weak](auto&&, auto&&)
+                {
+                    queue.TryEnqueue([weak]()
+                        {
+                            if (auto self = weak.get())
+                            {
+                                self->FillMediaSources();
+                            }
+                        });
+                });
+            FillMediaSources();
+        }
+        catch (...)
+        {
+            // Без списка приложений остаётся режим «Автоматически».
+        }
+    }
+
+    void MainWindow::FillMediaSources()
+    {
+        std::vector<std::wstring> ids{ L"" };
+        std::vector<std::wstring> names{ L"Автоматически (выбирает Windows)" };
+
+        try
+        {
+            if (m_mediaManager)
+            {
+                for (auto const& session : m_mediaManager.GetSessions())
+                {
+                    const std::wstring id{ session.SourceAppUserModelId() };
+                    const bool known = std::any_of(ids.begin(), ids.end(), [&id](std::wstring const& other)
+                        {
+                            return _wcsicmp(other.c_str(), id.c_str()) == 0;
+                        });
+                    if (!id.empty() && !known)
+                    {
+                        ids.push_back(id);
+                        names.push_back(FriendlyAppName(id));
+                    }
+                }
+            }
+        }
+        catch (...)
+        {
+        }
+
+        // Выбранное ранее приложение показываем, даже если сейчас оно не запущено.
+        size_t selected = 0;
+        if (!m_settings.mediaSource.empty())
+        {
+            for (size_t i = 1; i < ids.size(); ++i)
+            {
+                if (_wcsicmp(ids[i].c_str(), m_settings.mediaSource.c_str()) == 0)
+                {
+                    selected = i;
+                }
+            }
+            if (selected == 0)
+            {
+                ids.push_back(m_settings.mediaSource);
+                names.push_back(FriendlyAppName(m_settings.mediaSource) + L" (сейчас не играет)");
+                selected = ids.size() - 1;
+            }
+        }
+
+        m_fillingSources = true;
+        auto box = MediaSourceBox();
+        box.Items().Clear();
+        for (auto const& name : names)
+        {
+            box.Items().Append(box_value(hstring(name)));
+        }
+        m_sourceIds = std::move(ids);
+        box.SelectedIndex(static_cast<int32_t>(selected));
+        m_fillingSources = false;
+    }
+
+    void MainWindow::OnMediaSourceSelected(Windows::Foundation::IInspectable const&, SelectionChangedEventArgs const&)
+    {
+        if (!m_ready || m_fillingSources)
+        {
+            return;
+        }
+        const int32_t index = MediaSourceBox().SelectedIndex();
+        if (index < 0 || static_cast<size_t>(index) >= m_sourceIds.size())
+        {
+            return;
+        }
+        m_settings.mediaSource = m_sourceIds[static_cast<size_t>(index)];
+        SaveFromControls();
     }
 
     // ---------------------------------------------------------------- состояние подключения

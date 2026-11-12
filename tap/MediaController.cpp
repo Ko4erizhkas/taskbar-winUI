@@ -24,6 +24,20 @@ namespace barkit
         Initialize();
     }
 
+    void MediaController::SetSource(std::wstring const& source)
+    {
+        {
+            std::scoped_lock guard(m_mutex);
+            if (m_source == source)
+            {
+                return;
+            }
+            m_source = source;
+        }
+        BARKIT_LOG(L"Media: source = %s", source.empty() ? L"<auto>" : source.c_str());
+        AttachCurrentSession();
+    }
+
     winrt::fire_and_forget MediaController::Initialize()
     {
         try
@@ -36,6 +50,9 @@ namespace barkit
                 m_manager = manager;
             }
             m_sessionChangedRevoker = manager.CurrentSessionChanged(winrt::auto_revoke,
+                [this](auto&&, auto&&) { AttachCurrentSession(); });
+            // Нужное приложение может запуститься или закрыться, не став «текущим» для системы.
+            m_sessionsRevoker = manager.SessionsChanged(winrt::auto_revoke,
                 [this](auto&&, auto&&) { AttachCurrentSession(); });
 
             BARKIT_LOG(L"Media: session manager ready");
@@ -58,16 +75,35 @@ namespace barkit
         try
         {
             Manager manager{ nullptr };
+            std::wstring source;
             {
                 std::scoped_lock guard(m_mutex);
                 manager = m_manager;
+                source = m_source;
             }
             if (!manager)
             {
                 return;
             }
 
-            auto session = manager.GetCurrentSession();
+            Session session{ nullptr };
+            if (source.empty())
+            {
+                session = manager.GetCurrentSession();
+            }
+            else
+            {
+                // Выбрано конкретное приложение: если оно сейчас ничего не играет, поле просто скрывается.
+                for (auto const& candidate : manager.GetSessions())
+                {
+                    const auto id = candidate.SourceAppUserModelId();
+                    if (CompareStringOrdinal(id.c_str(), -1, source.c_str(), -1, TRUE) == CSTR_EQUAL)
+                    {
+                        session = candidate;
+                        break;
+                    }
+                }
+            }
             {
                 std::scoped_lock guard(m_mutex);
                 m_propertiesRevoker.revoke();

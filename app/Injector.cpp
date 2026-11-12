@@ -10,9 +10,9 @@ namespace barkit
         using InitializeXamlDiagnosticsExFn = HRESULT(WINAPI*)(
             LPCWSTR endPointName, DWORD pid, LPCWSTR xamlDiagnosticsDll, LPCWSTR tapDll, CLSID tapClsid, LPCWSTR initializationData);
 
-        bool IsTapLoaded(DWORD explorerPid)
+        bool IsTapLoaded(DWORD explorerPid, const std::wstring& dll)
         {
-            HANDLE mutex = OpenMutexW(SYNCHRONIZE, FALSE, TapLoadedMutexName(explorerPid).c_str());
+            HANDLE mutex = OpenMutexW(SYNCHRONIZE, FALSE, TapLoadedMutexName(explorerPid, dll).c_str());
             if (!mutex)
             {
                 return false;
@@ -21,29 +21,56 @@ namespace barkit
             return true;
         }
 
-        // Путь к DLL, которая сейчас работает в explorer.exe с данным PID (пусто, если неизвестно).
-        std::wstring LoadedTapPath(DWORD explorerPid)
+        bool FileExists(const std::wstring& path)
         {
-            HKEY key = nullptr;
-            if (RegOpenKeyExW(HKEY_CURRENT_USER, kRuntimePath, 0, KEY_READ, &key) != ERROR_SUCCESS)
+            return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+        }
+
+        // Копирует DLL в %LOCALAPPDATA%\BarKit\tap\<версия> и возвращает путь к копии.
+        // В explorer.exe загружается именно копия: исходный файл остаётся свободным, его можно
+        // пересобирать и заменять, не перезапуская Проводник. Версия = размер + время изменения файла.
+        std::wstring PrepareTapCopy(const std::wstring& source)
+        {
+            WIN32_FILE_ATTRIBUTE_DATA info{};
+            if (!GetFileAttributesExW(source.c_str(), GetFileExInfoStandard, &info))
             {
-                return {};
+                return source;
+            }
+            wchar_t version[64]{};
+            swprintf_s(version, std::size(version), L"%08X-%08X%08X", static_cast<unsigned>(info.nFileSizeLow),
+                static_cast<unsigned>(info.ftLastWriteTime.dwHighDateTime), static_cast<unsigned>(info.ftLastWriteTime.dwLowDateTime));
+
+            const std::wstring root = DataFolder() + L"\\tap";
+            CreateDirectoryW(root.c_str(), nullptr);
+
+            // Убираем копии прошлых версий. Те, что ещё загружены в explorer.exe, заняты и просто не удалятся.
+            WIN32_FIND_DATAW entry{};
+            const HANDLE find = FindFirstFileW((root + L"\\*").c_str(), &entry);
+            if (find != INVALID_HANDLE_VALUE)
+            {
+                do
+                {
+                    const std::wstring name = entry.cFileName;
+                    if ((entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && name != L"." && name != L".." && name != version)
+                    {
+                        const std::wstring folder = root + L"\\" + name;
+                        if (DeleteFileW((folder + L"\\" + kTapDllName).c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND)
+                        {
+                            RemoveDirectoryW(folder.c_str());
+                        }
+                    }
+                } while (FindNextFileW(find, &entry));
+                FindClose(find);
             }
 
-            std::wstring result;
-            DWORD pid = 0;
-            DWORD size = sizeof(pid);
-            if (RegGetValueW(key, nullptr, L"TapPid", RRF_RT_REG_DWORD, nullptr, &pid, &size) == ERROR_SUCCESS && pid == explorerPid)
+            const std::wstring folder = root + L"\\" + version;
+            CreateDirectoryW(folder.c_str(), nullptr);
+            const std::wstring target = folder + L"\\" + kTapDllName;
+            if (!FileExists(target) && !CopyFileW(source.c_str(), target.c_str(), TRUE) && !FileExists(target))
             {
-                wchar_t path[MAX_PATH]{};
-                size = sizeof(path);
-                if (RegGetValueW(key, nullptr, L"TapPath", RRF_RT_REG_SZ, nullptr, path, &size) == ERROR_SUCCESS)
-                {
-                    result = path;
-                }
+                return source; // не получилось скопировать — работаем по-старому, из папки приложения
             }
-            RegCloseKey(key);
-            return result;
+            return target;
         }
     }
 
@@ -81,19 +108,22 @@ namespace barkit
             return { InjectState::TaskbarNotFound, HRESULT_FROM_WIN32(ERROR_NOT_FOUND) };
         }
 
-        const std::wstring dll = TapDllPath();
-        if (GetFileAttributesW(dll.c_str()) == INVALID_FILE_ATTRIBUTES)
+        const std::wstring source = TapDllPath();
+        if (!FileExists(source))
         {
             return { InjectState::DllMissing, HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) };
         }
 
-        if (IsTapLoaded(pid))
+        // Назначаем активной копию текущей версии; копии прошлых версий, если они есть в explorer.exe, «засыпают».
+        const std::wstring dll = PrepareTapCopy(source);
+        if (!SamePath(ReadActiveTap(), dll))
         {
-            const std::wstring loaded = LoadedTapPath(pid);
-            if (!loaded.empty() && _wcsicmp(loaded.c_str(), dll.c_str()) != 0)
-            {
-                return { InjectState::OtherVersionLoaded, S_FALSE };
-            }
+            WriteActiveTap(dll);
+            Sleep(500); // даём прежней копии время вернуть панель в исходное состояние
+        }
+
+        if (IsTapLoaded(pid, dll))
+        {
             return { InjectState::AlreadyConnected, S_OK };
         }
 
@@ -129,7 +159,7 @@ namespace barkit
         // DLL создаёт мьютекс, когда подписка на дерево панели задач действительно удалась.
         for (int attempt = 0; attempt < 50; ++attempt)
         {
-            if (IsTapLoaded(pid))
+            if (IsTapLoaded(pid, dll))
             {
                 return { InjectState::Connected, S_OK };
             }

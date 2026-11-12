@@ -61,6 +61,7 @@ namespace barkit
         DWORD mediaTextWidth = 180;  // максимальная ширина текста, px
         bool mediaShowArt = true;
         bool mediaShowControls = true;
+        std::wstring mediaSource;    // AppUserModelId приложения, за которым следим; пусто — выбирает система
     };
 
     namespace detail
@@ -121,6 +122,14 @@ namespace barkit
         s.mediaTextWidth = Clamp(ReadDword(key, L"MediaTextWidth", s.mediaTextWidth), 40, 600);
         s.mediaShowArt = ReadDword(key, L"MediaShowArt", s.mediaShowArt) != 0;
         s.mediaShowControls = ReadDword(key, L"MediaShowControls", s.mediaShowControls) != 0;
+        {
+            wchar_t source[512]{};
+            DWORD size = sizeof(source);
+            if (RegGetValueW(key, nullptr, L"MediaSource", RRF_RT_REG_SZ, nullptr, source, &size) == ERROR_SUCCESS)
+            {
+                s.mediaSource = source;
+            }
+        }
 
         RegCloseKey(key);
         return s;
@@ -154,6 +163,8 @@ namespace barkit
         WriteDword(key, L"MediaTextWidth", s.mediaTextWidth);
         WriteDword(key, L"MediaShowArt", s.mediaShowArt);
         WriteDword(key, L"MediaShowControls", s.mediaShowControls);
+        RegSetValueExW(key, L"MediaSource", 0, REG_SZ, reinterpret_cast<const BYTE*>(s.mediaSource.c_str()),
+            static_cast<DWORD>((s.mediaSource.size() + 1) * sizeof(wchar_t)));
 
         // Enabled пишется последним: к этому моменту остальные значения уже на месте.
         WriteDword(key, L"Enabled", s.enabled);
@@ -191,8 +202,49 @@ namespace barkit
         return path;
     }
 
-    inline std::wstring TapLoadedMutexName(DWORD explorerPid)
+    // BarKit.exe загружает в explorer.exe не файл из своей папки, а его копию из %LOCALAPPDATA%\BarKit\tap\<версия>.
+    // В explorer.exe могут одновременно находиться копии разных версий (выгрузить DLL оттуда нельзя),
+    // поэтому работает только та, чей путь записан в ActiveTap; остальные «спят».
+    inline std::wstring ReadActiveTap()
     {
-        return std::wstring(kTapLoadedMutexPrefix) + std::to_wstring(explorerPid);
+        wchar_t path[MAX_PATH * 2]{};
+        DWORD size = sizeof(path);
+        if (RegGetValueW(HKEY_CURRENT_USER, kRegistryPath, L"ActiveTap", RRF_RT_REG_SZ, nullptr, path, &size) == ERROR_SUCCESS)
+        {
+            return path;
+        }
+        return {};
+    }
+
+    inline void WriteActiveTap(const std::wstring& path)
+    {
+        HKEY key = nullptr;
+        if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegistryPath, 0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr) == ERROR_SUCCESS)
+        {
+            RegSetValueExW(key, L"ActiveTap", 0, REG_SZ, reinterpret_cast<const BYTE*>(path.c_str()),
+                static_cast<DWORD>((path.size() + 1) * sizeof(wchar_t)));
+            RegCloseKey(key);
+        }
+    }
+
+    inline bool SamePath(const std::wstring& a, const std::wstring& b)
+    {
+        return CompareStringOrdinal(a.c_str(), -1, b.c_str(), -1, TRUE) == CSTR_EQUAL;
+    }
+
+    // Мьютекс существует, пока данная копия DLL подписана на панель задач в данном explorer.exe.
+    inline std::wstring TapLoadedMutexName(DWORD explorerPid, const std::wstring& dllPath)
+    {
+        std::wstring lower = dllPath;
+        CharLowerBuffW(lower.data(), static_cast<DWORD>(lower.size()));
+        unsigned long long hash = 1469598103934665603ULL; // FNV-1a
+        for (const wchar_t ch : lower)
+        {
+            hash ^= static_cast<unsigned long long>(ch);
+            hash *= 1099511628211ULL;
+        }
+        wchar_t suffix[40]{};
+        wsprintfW(suffix, L".%08X%08X", static_cast<unsigned>(hash >> 32), static_cast<unsigned>(hash & 0xFFFFFFFF));
+        return std::wstring(kTapLoadedMutexPrefix) + std::to_wstring(explorerPid) + suffix;
     }
 }

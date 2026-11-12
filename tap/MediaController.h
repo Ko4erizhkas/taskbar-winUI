@@ -24,6 +24,9 @@ namespace barkit
         // UI-поток. Повторные вызовы ничего не делают.
         void EnsureStarted(wuc::CoreDispatcher const& dispatcher, std::function<void()> onChanged);
 
+        // UI-поток. Какое приложение отслеживать: его AppUserModelId или пустая строка — «выбирает система».
+        void SetSource(std::wstring const& source);
+
         MediaState const& State() const noexcept { return m_state; }
 
         void Previous() noexcept;
@@ -49,6 +52,8 @@ namespace barkit
         Manager m_manager{ nullptr };
         Session m_session{ nullptr };
         Manager::CurrentSessionChanged_revoker m_sessionChangedRevoker;
+        Manager::SessionsChanged_revoker m_sessionsRevoker;
+        std::wstring m_source;
         Session::MediaPropertiesChanged_revoker m_propertiesRevoker;
         Session::PlaybackInfoChanged_revoker m_playbackRevoker;
 

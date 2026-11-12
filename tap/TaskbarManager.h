@@ -91,6 +91,7 @@ namespace barkit
         unsigned m_errorCount = 0;
         bool m_applyingBrush = false;
         bool m_loggedGrouping = false;
+        bool m_idle = false; // эффекты выключены и уже откатаны — панель не трогаем
 
         std::vector<winrt::weak_ref<wux::FrameworkElement>> m_frames;
         std::vector<std::shared_ptr<BackgroundPart>> m_backgrounds;

@@ -127,7 +127,9 @@ namespace barkit
                 if (SUCCEEDED(hr))
                 {
                     // Сообщаем приложению, что DLL работает в этом explorer.exe (дескриптор намеренно не закрываем).
-                    static HANDLE loadedMutex = CreateMutexW(nullptr, FALSE, TapLoadedMutexName(GetCurrentProcessId()).c_str());
+                    wchar_t modulePath[MAX_PATH]{};
+                    GetModuleFileNameW(g_module, modulePath, MAX_PATH);
+                    static HANDLE loadedMutex = CreateMutexW(nullptr, FALSE, TapLoadedMutexName(GetCurrentProcessId(), modulePath).c_str());
                     (void)loadedMutex;
                 }
                 return 0;
