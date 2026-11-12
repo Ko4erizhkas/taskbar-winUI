@@ -827,6 +827,7 @@ namespace barkit
             const bool wanted = m_settings.enabled && m_settings.mediaEnabled;
             if (wanted)
             {
+                MediaController::Instance().SetSource(m_settings.mediaSource);
                 MediaController::Instance().EnsureStarted(m_dispatcher, [this]() { UpdateMedia(); });
             }
             auto const& state = MediaController::Instance().State();

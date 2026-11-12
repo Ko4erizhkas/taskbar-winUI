@@ -61,6 +61,7 @@ namespace barkit
         DWORD mediaTextWidth = 180;  // максимальная ширина текста, px
         bool mediaShowArt = true;
         bool mediaShowControls = true;
+        std::wstring mediaSource;    // AppUserModelId приложения, за которым следим; пусто — выбирает система
     };
 
     namespace detail
@@ -121,6 +122,14 @@ namespace barkit
         s.mediaTextWidth = Clamp(ReadDword(key, L"MediaTextWidth", s.mediaTextWidth), 40, 600);
         s.mediaShowArt = ReadDword(key, L"MediaShowArt", s.mediaShowArt) != 0;
         s.mediaShowControls = ReadDword(key, L"MediaShowControls", s.mediaShowControls) != 0;
+        {
+            wchar_t source[512]{};
+            DWORD size = sizeof(source);
+            if (RegGetValueW(key, nullptr, L"MediaSource", RRF_RT_REG_SZ, nullptr, source, &size) == ERROR_SUCCESS)
+            {
+                s.mediaSource = source;
+            }
+        }
 
         RegCloseKey(key);
         return s;
@@ -154,6 +163,8 @@ namespace barkit
         WriteDword(key, L"MediaTextWidth", s.mediaTextWidth);
         WriteDword(key, L"MediaShowArt", s.mediaShowArt);
         WriteDword(key, L"MediaShowControls", s.mediaShowControls);
+        RegSetValueExW(key, L"MediaSource", 0, REG_SZ, reinterpret_cast<const BYTE*>(s.mediaSource.c_str()),
+            static_cast<DWORD>((s.mediaSource.size() + 1) * sizeof(wchar_t)));
 
         // Enabled пишется последним: к этому моменту остальные значения уже на месте.
         WriteDword(key, L"Enabled", s.enabled);

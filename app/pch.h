@@ -27,7 +27,9 @@
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.ApplicationModel.Activation.h>
+#include <winrt/Windows.ApplicationModel.h>
 #include <winrt/Windows.Graphics.h>
+#include <winrt/Windows.Media.Control.h>
 #include <winrt/Windows.UI.h>
 #include <winrt/Windows.UI.Xaml.Interop.h>
 

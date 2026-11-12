@@ -201,6 +201,23 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Приложение" />
+                            <TextBlock Text="За каким плеером следить. В списке — приложения, которые сейчас что-то воспроизводят; если выбранное молчит, поле скрывается."
+                                       Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                        <ComboBox x:Name="MediaSourceBox" Grid.Column="1" MinWidth="280" MaxWidth="320" SelectionChanged="OnMediaSourceSelected" />
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
                         <TextBlock Text="Расположение" VerticalAlignment="Center" />
                         <ComboBox x:Name="MediaPositionBox" Grid.Column="1" MinWidth="280" SelectionChanged="OnSettingSelected">
                             <ComboBoxItem Content="В начале панели (слева / сверху)" />
