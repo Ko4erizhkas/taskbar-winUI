@@ -71,6 +71,8 @@ BarKit.exe  (app/)                         explorer.exe
 msbuild BarKit.sln /restore /p:Configuration=Release /p:Platform=x64
 ```
 
+При сборке из самой Visual Studio пакеты NuGet нужно один раз восстановить — VS не делает этого для C++-проектов с `PackageReference`. Выполните в «Developer PowerShell» из папки репозитория `msbuild BarKit.sln /t:Restore /p:Configuration=Release /p:Platform=x64` и переоткройте решение (без этого сборка падает с `MIDL2011: unresolved type ... Microsoft.UI.Xaml.Window`).
+
 Результат — в `build\x64\Release\`.
 
 При сборке из самой Visual Studio выберите платформу **x64**. Пакеты NuGet для C++-проектов студия сама не восстанавливает: первая сборка восстановит их и остановится с подсказкой, вторая пройдёт. Ошибка MIDL `unresolved type declaration: Microsoft.UI.Xaml.Window` означает именно невосстановленные пакеты. Тот же шаг выполняет GitHub Actions (`.github/workflows/build.yml`) при каждом push.
