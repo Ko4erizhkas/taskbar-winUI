@@ -71,7 +71,7 @@ namespace barkit
         bool IsRunning(wux::FrameworkElement const& button);
 
         void UpdateMedia();
-        std::optional<double> AppsEnd(wux::FrameworkElement const& frame, wuxc::Grid const& host, bool horizontal);
+        MediaLayoutHints LayoutHints(wux::FrameworkElement const& frame, wuxc::Grid const& host, bool horizontal);
 
         void DumpTree();
         void WatchHostProcess(DWORD pid);

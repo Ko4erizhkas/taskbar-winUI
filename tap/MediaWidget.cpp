@@ -181,7 +181,7 @@ namespace barkit
         BARKIT_LOG(L"Media: widget created");
     }
 
-    void MediaWidget::Update(bool wanted, Settings const& settings, MediaState const& state, std::optional<double> appsEnd)
+    void MediaWidget::Update(bool wanted, Settings const& settings, MediaState const& state, MediaLayoutHints const& hints)
     {
         auto frame = m_frame.get();
         if (!frame)
@@ -217,7 +217,7 @@ namespace barkit
         const bool horizontal = IsHorizontal(frame);
         ApplyContent(settings, state, horizontal);
         SetVisible(m_root, true);
-        ApplyPosition(settings, host, horizontal, appsEnd);
+        ApplyPosition(settings, host, horizontal, hints);
     }
 
     void MediaWidget::ApplyContent(Settings const& settings, MediaState const& state, bool horizontal)
@@ -274,7 +274,62 @@ namespace barkit
         }
     }
 
-    void MediaWidget::ApplyPosition(Settings const& settings, wuxc::Grid const& host, bool horizontal, std::optional<double> appsEnd)
+    // Трей и кнопка виджетов лежат не внутри сетки панели, а рядом с ней, поэтому ищем их от корня дерева.
+    void MediaWidget::FindNeighbours(wuxc::Grid const& host)
+    {
+        if (m_tray.get() && m_widgetsButton.get())
+        {
+            return;
+        }
+        if (m_neighbourSearchCountdown > 0)
+        {
+            --m_neighbourSearchCountdown;
+            return;
+        }
+        m_neighbourSearchCountdown = 20; // обход дерева недешёвый — повторяем не на каждом проходе
+
+        wux::DependencyObject root = host;
+        for (auto parent = ParentOf(root); parent; parent = ParentOf(root))
+        {
+            root = parent;
+        }
+        if (!m_tray.get())
+        {
+            if (auto tray = FindDescendantByClass(root, kSystemTrayFrameClass, 8))
+            {
+                m_tray = winrt::make_weak(tray);
+                BARKIT_LOG(L"Media: system tray found");
+            }
+        }
+        if (!m_widgetsButton.get())
+        {
+            if (auto button = FindDescendantByClass(root, kWidgetsButtonClass, 10))
+            {
+                m_widgetsButton = winrt::make_weak(button);
+            }
+        }
+    }
+
+    void MediaWidget::AddObstacle(std::vector<Span>& spans, wux::FrameworkElement const& element, wuxc::Grid const& host, bool horizontal)
+    {
+        if (!element || element.Visibility() != wux::Visibility::Visible || element.ActualWidth() <= 0 || element.ActualHeight() <= 0)
+        {
+            return;
+        }
+        try
+        {
+            const auto origin = element.TransformToVisual(host).TransformPoint(wf::Point{ 0, 0 });
+            const double start = horizontal ? origin.X : origin.Y;
+            const double size = horizontal ? element.ActualWidth() : element.ActualHeight();
+            spans.push_back(Span{ start, start + size });
+        }
+        catch (...)
+        {
+            // Элемент из другого дерева — координаты не сопоставить.
+        }
+    }
+
+    void MediaWidget::ApplyPosition(Settings const& settings, wuxc::Grid const& host, bool horizontal, MediaLayoutHints const& hints)
     {
         const double hostLength = horizontal ? host.ActualWidth() : host.ActualHeight();
         const double hostCross = horizontal ? host.ActualHeight() : host.ActualWidth();
@@ -285,14 +340,38 @@ namespace barkit
             return; // layout ещё не посчитан; пересчитаем на следующем проходе
         }
 
+        // 1. Собираем занятые участки: значки (Пуск, поиск, приложения), системный трей, кнопка виджетов.
+        FindNeighbours(host);
+        std::vector<Span> occupied = hints.occupied;
+        AddObstacle(occupied, m_tray.get(), host, horizontal);
+        AddObstacle(occupied, m_widgetsButton.get(), host, horizontal);
+
+        for (auto& span : occupied)
+        {
+            span.start -= kEdgeGap;
+            span.end += kEdgeGap;
+        }
+        std::sort(occupied.begin(), occupied.end(), [](Span const& a, Span const& b) { return a.start < b.start; });
+
+        // 2. Желаемое место. Отступ из настроек считается от ближайшего соседа, а не от края панели.
         const double offset = static_cast<double>(settings.mediaOffset);
         double position = 0;
 
         switch (settings.mediaPosition)
         {
         case MediaPosition::Start:
-            position = kEdgeGap + offset;
+        {
+            double anchor = 0;
+            for (auto const& span : occupied)
+            {
+                if (span.start < anchor + length && span.end > anchor)
+                {
+                    anchor = span.end; // у начала панели что-то стоит — встаём сразу за ним
+                }
+            }
+            position = std::max(anchor, kEdgeGap) + offset;
             break;
+        }
 
         case MediaPosition::Center:
             position = (hostLength - length) / 2 + offset;
@@ -300,30 +379,67 @@ namespace barkit
 
         case MediaPosition::End:
         {
-            // Если системный трей лежит внутри той же сетки — встаём перед ним, иначе у края.
             double anchor = hostLength;
-            auto tray = m_tray.get();
-            if (!tray)
+            for (auto it = occupied.rbegin(); it != occupied.rend(); ++it)
             {
-                tray = FindDescendantByClass(host, kSystemTrayFrameClass, 4);
-                m_tray = tray;
-            }
-            if (tray && tray.ActualWidth() > 0 && tray.ActualHeight() > 0)
-            {
-                const auto origin = tray.TransformToVisual(host).TransformPoint(wf::Point{ 0, 0 });
-                const double trayStart = horizontal ? origin.X : origin.Y;
-                if (trayStart > hostLength / 2)
+                if (it->end > anchor - length && it->start < anchor)
                 {
-                    anchor = trayStart;
+                    anchor = it->start; // у конца панели трей — встаём перед ним
                 }
             }
-            position = anchor - length - kEdgeGap - offset;
+            position = std::min(anchor, hostLength - kEdgeGap) - length - offset;
             break;
         }
 
         case MediaPosition::AfterApps:
-            position = (appsEnd ? *appsEnd : kEdgeGap) + kEdgeGap + offset;
+            position = (hints.appsEnd ? *hints.appsEnd : 0.0) + kEdgeGap + offset;
             break;
+        }
+
+        // 3. Если желаемое место пересекается с соседями — сдвигаемся в ближайший свободный промежуток.
+        std::vector<Span> gaps;
+        double cursor = 0;
+        for (auto const& span : occupied)
+        {
+            if (span.start > cursor)
+            {
+                gaps.push_back(Span{ cursor, std::min(span.start, hostLength) });
+            }
+            cursor = std::max(cursor, span.end);
+        }
+        if (cursor < hostLength)
+        {
+            gaps.push_back(Span{ cursor, hostLength });
+        }
+
+        std::optional<double> best;
+        double widest = 0;
+        std::optional<double> widestStart;
+        for (auto const& gap : gaps)
+        {
+            const double room = gap.end - gap.start;
+            if (room > widest)
+            {
+                widest = room;
+                widestStart = gap.start;
+            }
+            if (room < length)
+            {
+                continue;
+            }
+            const double candidate = std::clamp(position, gap.start, gap.end - length);
+            if (!best || std::abs(candidate - position) < std::abs(*best - position))
+            {
+                best = candidate;
+            }
+        }
+        if (best)
+        {
+            position = *best;
+        }
+        else if (widestStart)
+        {
+            position = *widestStart; // целиком не помещаемся нигде — занимаем самый широкий промежуток
         }
 
         position = std::clamp(position, 0.0, std::max(0.0, hostLength - length));
