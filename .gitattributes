@@ -6,3 +6,4 @@
 *.rc text eol=crlf
 *.ico binary
 *.png binary
+*.targets text eol=crlf
