@@ -82,6 +82,19 @@ namespace barkit
         }
     }
 
+    namespace
+    {
+        std::wstring OwnModulePath()
+        {
+            HMODULE module = nullptr;
+            GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                reinterpret_cast<LPCWSTR>(&OwnModulePath), &module);
+            wchar_t path[MAX_PATH]{};
+            GetModuleFileNameW(module, path, MAX_PATH);
+            return path;
+        }
+    }
+
     TaskbarManager& TaskbarManager::Instance()
     {
         static TaskbarManager instance;
@@ -369,6 +382,17 @@ namespace barkit
         try
         {
             m_settings = LoadSettings();
+            m_idle = false;
+
+            // Работает только та копия DLL, которую назначило приложение (см. ReadActiveTap).
+            const std::wstring activeTap = ReadActiveTap();
+            const bool isActiveCopy = activeTap.empty() || SamePath(activeTap, OwnModulePath());
+            if (!isActiveCopy)
+            {
+                m_settings.enabled = false;
+                m_settings.dumpRequest = m_lastDumpRequest;
+            }
+
             if (!m_settingsLoaded)
             {
                 m_settingsLoaded = true;
@@ -413,6 +437,13 @@ namespace barkit
     void TaskbarManager::UpdateAll()
     {
         m_lastUpdateTick = GetTickCount64();
+        if (m_idle)
+        {
+            return;
+        }
+        // Когда эффекты выключены, делаем один проход отката и дальше панель не трогаем:
+        // иначе «спящая» копия мешала бы активной копии другой версии.
+        const bool goIdle = m_settingsLoaded && !m_settings.enabled;
         try
         {
             Prune();
@@ -441,6 +472,10 @@ namespace barkit
             }
 
             UpdateMedia();
+            if (goIdle)
+            {
+                m_idle = true;
+            }
         }
         catch (...)
         {
