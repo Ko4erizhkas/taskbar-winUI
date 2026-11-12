@@ -7,6 +7,7 @@ namespace barkit
     inline constexpr std::wstring_view kTaskbarFrameClass = L"Taskbar.TaskbarFrame";
     inline constexpr std::wstring_view kTaskListButtonClass = L"Taskbar.TaskListButton";
     inline constexpr std::wstring_view kSystemTrayFrameClass = L"SystemTray.SystemTrayFrame";
+    inline constexpr std::wstring_view kWidgetsButtonClass = L"Taskbar.AugmentedEntryPointButton";
     inline constexpr std::wstring_view kRectangleClass = L"Windows.UI.Xaml.Shapes.Rectangle";
     inline constexpr std::wstring_view kBackgroundFillName = L"BackgroundFill";
     inline constexpr std::wstring_view kBackgroundStrokeName = L"BackgroundStroke";

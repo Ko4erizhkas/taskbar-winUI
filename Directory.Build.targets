@@ -1,0 +1,17 @@
+<Project>
+  <!-- Visual Studio сама не восстанавливает NuGet-пакеты для C++-проектов с PackageReference.
+       Если пакеты ещё не восстановлены, делаем это перед сборкой (в командной строке хватает msbuild /restore). -->
+  <Target Name="BarKitEnsureNuGetRestore"
+          BeforeTargets="PrepareForBuild"
+          Condition="'$(BuildingInsideVisualStudio)' == 'true'
+                     and '$(DesignTimeBuild)' != 'true'
+                     and '$(RestoreInProgress)' != 'true'
+                     and '$(MSBuildProjectExtension)' == '.vcxproj'
+                     and '$(RestoreProjectStyle)' == 'PackageReference'
+                     and '$(MSBuildProjectExtensionsPath)' != ''
+                     and !Exists('$(MSBuildProjectExtensionsPath)project.assets.json')">
+    <Message Importance="high" Text="BarKit: восстанавливаю NuGet-пакеты для $(MSBuildProjectName)..." />
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="Restore" Properties="RestoreInProgress=true" BuildInParallel="false" />
+    <Error Text="NuGet-пакеты только что восстановлены. Запустите сборку ещё раз (при повторной ошибке — закройте и снова откройте решение)." />
+  </Target>
+</Project>

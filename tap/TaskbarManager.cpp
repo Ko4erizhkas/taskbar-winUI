@@ -737,9 +737,9 @@ namespace barkit
 
     // ------------------------------------------------------------------ медиа
 
-    std::optional<double> TaskbarManager::AppsEnd(wux::FrameworkElement const& frame, wuxc::Grid const& host, bool horizontal)
+    MediaLayoutHints TaskbarManager::LayoutHints(wux::FrameworkElement const& frame, wuxc::Grid const& host, bool horizontal)
     {
-        std::optional<double> result;
+        MediaLayoutHints hints;
         for (auto const& container : m_containers)
         {
             auto parent = container.element.get();
@@ -747,28 +747,42 @@ namespace barkit
             {
                 continue;
             }
+
+            // В одном контейнере с приложениями лежат «Пуск», поиск и т. п. — занятым считаем весь ряд значков.
+            std::optional<Span> row;
             const int count = wuxm::VisualTreeHelper::GetChildrenCount(parent);
             for (int i = 0; i < count; ++i)
             {
                 auto child = wuxm::VisualTreeHelper::GetChild(parent, i).try_as<wux::FrameworkElement>();
-                if (!child || !IsClass(child, kTaskListButtonClass))
-                {
-                    continue;
-                }
-                if (!IsLiveSlot(child, wuxc::Primitives::LayoutInformation::GetLayoutSlot(child)))
+                if (!child || !IsLiveSlot(child, wuxc::Primitives::LayoutInformation::GetLayoutSlot(child)))
                 {
                     continue;
                 }
                 // TransformToVisual учитывает и наш сдвиг группировки.
                 const auto origin = child.TransformToVisual(host).TransformPoint(wf::Point{ 0, 0 });
-                const double end = horizontal ? origin.X + child.ActualWidth() : origin.Y + child.ActualHeight();
-                if (!result || end > *result)
+                const double start = horizontal ? origin.X : origin.Y;
+                const double end = start + (horizontal ? child.ActualWidth() : child.ActualHeight());
+
+                if (!row)
                 {
-                    result = end;
+                    row = Span{ start, end };
+                }
+                else
+                {
+                    row->start = std::min(row->start, start);
+                    row->end = std::max(row->end, end);
+                }
+                if (IsClass(child, kTaskListButtonClass) && (!hints.appsEnd || end > *hints.appsEnd))
+                {
+                    hints.appsEnd = end;
                 }
             }
+            if (row)
+            {
+                hints.occupied.push_back(*row);
+            }
         }
-        return result;
+        return hints;
     }
 
     void TaskbarManager::UpdateMedia()
@@ -815,15 +829,15 @@ namespace barkit
                     continue;
                 }
 
-                std::optional<double> appsEnd;
-                if (wanted && m_settings.mediaPosition == MediaPosition::AfterApps)
+                MediaLayoutHints hints;
+                if (wanted && state.hasSession)
                 {
                     if (auto host = widget->Host())
                     {
-                        appsEnd = AppsEnd(frame, host, IsHorizontal(frame));
+                        hints = LayoutHints(frame, host, IsHorizontal(frame));
                     }
                 }
-                widget->Update(wanted, m_settings, state, appsEnd);
+                widget->Update(wanted, m_settings, state, hints);
             }
         }
         catch (...)
