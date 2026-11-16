@@ -21,6 +21,12 @@ namespace barkit
         // Из любого потока.
         void NotifySettingsChanged() noexcept;
 
+        // Из потока подписки (Tap.cpp). Пока XAML перечисляет дерево панели, мы в нём ничего не меняем:
+        // правки дерева посреди перечисления могут сорвать подписку.
+        void BeginAdvise() noexcept;
+        void EndAdvise() noexcept;
+        bool IsReady() const noexcept { return m_ready; }
+
     private:
         struct BackgroundPart
         {
@@ -77,6 +83,8 @@ namespace barkit
         void WatchHostProcess(DWORD pid);
 
         std::atomic<bool> m_ready{ false };
+        std::atomic<bool> m_advising{ false };
+        std::atomic<ULONGLONG> m_adviseStartTick{ 0 };
         wuc::CoreDispatcher m_dispatcher{ nullptr };
         wux::DispatcherTimer m_timer{ nullptr };
         Settings m_settings;

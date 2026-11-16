@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../shared/Settings.h"
+
 namespace barkit
 {
     // Имена классов из Taskbar.View.dll. Это внутренности Windows: после крупных обновлений
@@ -133,6 +135,34 @@ namespace barkit
             static_cast<uint8_t>((rgb >> 16) & 0xFF),
             static_cast<uint8_t>((rgb >> 8) & 0xFF),
             static_cast<uint8_t>(rgb & 0xFF) };
+    }
+
+    // Кисть фона по настройкам внешнего вида (для режима System кисти нет — возвращается nullptr).
+    inline wuxm::Brush MakeAppearanceBrush(Appearance appearance, DWORD rgb, DWORD opacity)
+    {
+        const auto alpha = static_cast<uint8_t>((opacity > 100 ? 100 : opacity) * 255 / 100);
+        switch (appearance)
+        {
+        case Appearance::Clear:
+            return wuxm::SolidColorBrush(MakeColor(0, 0));
+
+        case Appearance::Tint:
+            return wuxm::SolidColorBrush(MakeColor(rgb, alpha));
+
+        case Appearance::Acrylic:
+        {
+            wuxm::AcrylicBrush brush;
+            brush.BackgroundSource(wuxm::AcrylicBackgroundSource::HostBackdrop);
+            brush.TintColor(MakeColor(rgb, 255));
+            brush.TintOpacity(opacity / 100.0);
+            brush.FallbackColor(MakeColor(rgb, alpha));
+            return brush;
+        }
+
+        case Appearance::System:
+        default:
+            return nullptr;
+        }
     }
 
     // Ячейка (0,0) на всю сетку: элемент, добавленный нами в чужой Grid, не должен обрезаться ячейкой.

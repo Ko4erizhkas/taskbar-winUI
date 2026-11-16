@@ -46,6 +46,7 @@ namespace barkit
         void CreateFlyout();
         void ToggleFlyout();
         void UpdateFlyout(MediaState const& state);
+        void ApplyFlyoutStyle();
 
         winrt::weak_ref<wux::FrameworkElement> m_frame;
         winrt::weak_ref<wuxc::Grid> m_host;
@@ -72,6 +73,8 @@ namespace barkit
         std::shared_ptr<bool> m_alive = std::make_shared<bool>(true);
 
         wuxc::Flyout m_flyout{ nullptr };
+        Settings m_settings;              // последние настройки, с которыми вызывали Update
+        std::wstring m_flyoutStyleKey;    // по каким параметрам собран текущий стиль карточки
         bool m_flyoutOpen = false;
         ULONGLONG m_flyoutClosedTick = 0;
         wuxc::Border m_cardArt{ nullptr };

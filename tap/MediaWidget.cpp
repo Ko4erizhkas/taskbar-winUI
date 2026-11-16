@@ -220,6 +220,7 @@ namespace barkit
         {
             return;
         }
+        m_settings = settings;
 
         if (!wanted || !state.hasSession)
         {
@@ -491,11 +492,76 @@ namespace barkit
             return;
         }
         UpdateFlyout(state);
+        ApplyFlyoutStyle();
 
         // Если с этой стороны места нет (панель сверху или справа), XAML сам выберет противоположную.
         const bool horizontal = IsHorizontal(m_frame.get());
         m_flyout.Placement(horizontal ? wuxc::Primitives::FlyoutPlacementMode::Top : wuxc::Primitives::FlyoutPlacementMode::Right);
         m_flyout.ShowAt(m_root);
+    }
+
+    // Фон, рамка и тема карточки. Стиль применяется в момент открытия, поэтому изменения настроек
+    // видны при следующем открытии карточки.
+    void MediaWidget::ApplyFlyoutStyle()
+    {
+        // Какие режим / цвет / плотность действуют с учётом выбранного стиля.
+        Appearance appearance = Appearance::System;
+        DWORD color = 0;
+        DWORD opacity = 0;
+        switch (m_settings.cardStyle)
+        {
+        case CardStyle::Taskbar:
+            appearance = m_settings.appearance;
+            color = m_settings.color;
+            opacity = m_settings.opacity;
+            break;
+        case CardStyle::Custom:
+            appearance = m_settings.cardAppearance;
+            color = m_settings.cardColor;
+            opacity = m_settings.cardOpacity;
+            break;
+        case CardStyle::System:
+        default:
+            break;
+        }
+
+        wchar_t key[64]{};
+        StringCchPrintfW(key, ARRAYSIZE(key), L"%u:%06X:%u", static_cast<unsigned>(appearance),
+            static_cast<unsigned>(color), static_cast<unsigned>(opacity));
+        if (m_flyoutStyleKey == key)
+        {
+            return;
+        }
+        m_flyoutStyleKey = key;
+
+        if (appearance == Appearance::System)
+        {
+            m_flyout.ClearValue(wuxc::Flyout::FlyoutPresenterStyleProperty());
+            return;
+        }
+
+        wux::Style style(winrt::xaml_typename<wuxc::FlyoutPresenter>());
+        const auto add = [&style](wux::DependencyProperty const& property, wf::IInspectable const& value)
+            {
+                style.Setters().Append(wux::Setter(property, value));
+            };
+
+        add(wuxc::Control::BackgroundProperty(), MakeAppearanceBrush(appearance, color, opacity));
+        add(wuxc::Control::BorderBrushProperty(), wuxm::SolidColorBrush(winrt::Windows::UI::Color{ 0x40, 0x80, 0x80, 0x80 }));
+        add(wuxc::Control::BorderThicknessProperty(), winrt::box_value(wux::Thickness{ 1, 1, 1, 1 }));
+        add(wuxc::Control::CornerRadiusProperty(), winrt::box_value(wux::CornerRadius{ 8, 8, 8, 8 }));
+        add(wuxc::Control::PaddingProperty(), winrt::box_value(wux::Thickness{ 16, 14, 16, 14 }));
+
+        // Текст должен читаться: на плотном тёмном фоне — светлая тема, на плотном светлом — тёмная.
+        // Если фон почти прозрачный, цвет под карточкой неизвестен — оставляем тему панели задач.
+        if (appearance != Appearance::Clear && opacity >= 35)
+        {
+            const double luminance = 0.299 * ((color >> 16) & 0xFF) + 0.587 * ((color >> 8) & 0xFF) + 0.114 * (color & 0xFF);
+            const auto theme = luminance < 140 ? wux::ElementTheme::Dark : wux::ElementTheme::Light;
+            add(wux::FrameworkElement::RequestedThemeProperty(), winrt::box_value(theme));
+        }
+
+        m_flyout.FlyoutPresenterStyle(style);
     }
 
     void MediaWidget::UpdateFlyout(MediaState const& state)

@@ -35,6 +35,13 @@ namespace barkit
         AfterApps = 3,  // сразу после значков приложений
     };
 
+    enum class CardStyle : DWORD
+    {
+        System = 0,   // стандартный вид всплывающих окон Windows
+        Taskbar = 1,  // как фон панели задач (те же режим, цвет и плотность)
+        Custom = 2,   // свои режим, цвет и плотность
+    };
+
     struct Settings
     {
         // Служебное
@@ -61,6 +68,12 @@ namespace barkit
         DWORD mediaTextWidth = 180;  // максимальная ширина текста, px
         bool mediaShowArt = true;
         bool mediaShowControls = true;
+        // Оформление выпадающей карточки
+        CardStyle cardStyle = CardStyle::Taskbar;
+        Appearance cardAppearance = Appearance::Acrylic; // для CardStyle::Custom (System здесь не используется)
+        DWORD cardColor = 0x202020;                      // 0xRRGGBB
+        DWORD cardOpacity = 60;                          // 0..100
+
         std::wstring mediaSource;    // AppUserModelId приложения, за которым следим; пусто — выбирает система
     };
 
@@ -122,6 +135,10 @@ namespace barkit
         s.mediaTextWidth = Clamp(ReadDword(key, L"MediaTextWidth", s.mediaTextWidth), 40, 600);
         s.mediaShowArt = ReadDword(key, L"MediaShowArt", s.mediaShowArt) != 0;
         s.mediaShowControls = ReadDword(key, L"MediaShowControls", s.mediaShowControls) != 0;
+        s.cardStyle = static_cast<CardStyle>(Clamp(ReadDword(key, L"MediaCardStyle", static_cast<DWORD>(s.cardStyle)), 0, 2));
+        s.cardAppearance = static_cast<Appearance>(Clamp(ReadDword(key, L"MediaCardAppearance", static_cast<DWORD>(s.cardAppearance)), 1, 3));
+        s.cardColor = ReadDword(key, L"MediaCardColor", s.cardColor) & 0x00FFFFFF;
+        s.cardOpacity = Clamp(ReadDword(key, L"MediaCardOpacity", s.cardOpacity), 0, 100);
         {
             wchar_t source[512]{};
             DWORD size = sizeof(source);
@@ -163,6 +180,10 @@ namespace barkit
         WriteDword(key, L"MediaTextWidth", s.mediaTextWidth);
         WriteDword(key, L"MediaShowArt", s.mediaShowArt);
         WriteDword(key, L"MediaShowControls", s.mediaShowControls);
+        WriteDword(key, L"MediaCardStyle", static_cast<DWORD>(s.cardStyle));
+        WriteDword(key, L"MediaCardAppearance", static_cast<DWORD>(s.cardAppearance));
+        WriteDword(key, L"MediaCardColor", s.cardColor);
+        WriteDword(key, L"MediaCardOpacity", s.cardOpacity);
         RegSetValueExW(key, L"MediaSource", 0, REG_SZ, reinterpret_cast<const BYTE*>(s.mediaSource.c_str()),
             static_cast<DWORD>((s.mediaSource.size() + 1) * sizeof(wchar_t)));
 
