@@ -21,6 +21,14 @@ namespace barkit
         wf::TimeSpan duration{};
         wf::DateTime positionUpdated{};
         double playbackRate = 1.0;
+        wf::TimeSpan timelineStart{};
+
+        // Перемотка, повтор и случайный порядок: поддерживают не все плееры (can* = false — кнопка неактивна).
+        bool canSeek = false;
+        bool canShuffle = false;
+        bool canRepeat = false;
+        bool shuffle = false;
+        int repeatMode = 0; // 0 — выкл, 1 — один трек, 2 — весь список
     };
 
     // Обёртка над системным API «что сейчас играет» (GlobalSystemMediaTransportControls).
@@ -41,6 +49,9 @@ namespace barkit
         void Previous() noexcept;
         void TogglePlayPause() noexcept;
         void Next() noexcept;
+        void Seek(double seconds) noexcept;  // позиция от начала трека; UI-поток
+        void CycleRepeat() noexcept;         // выкл -> один трек -> весь список -> выкл; UI-поток
+        void ToggleShuffle() noexcept;       // UI-поток
 
     private:
         using Manager = winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;

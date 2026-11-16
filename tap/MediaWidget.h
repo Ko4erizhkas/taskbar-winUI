@@ -47,6 +47,8 @@ namespace barkit
         void ToggleFlyout();
         void UpdateFlyout(MediaState const& state);
         void ApplyFlyoutStyle();
+        void CommitSeek();
+        void SetSliderValue(double value);
 
         winrt::weak_ref<wux::FrameworkElement> m_frame;
         winrt::weak_ref<wuxc::Grid> m_host;
@@ -83,7 +85,16 @@ namespace barkit
         wuxc::TextBlock m_cardArtist{ nullptr };
         wuxc::TextBlock m_cardAlbum{ nullptr };
         wuxc::StackPanel m_cardTimeline{ nullptr };
-        wuxc::ProgressBar m_cardProgress{ nullptr };
+        wuxc::Slider m_cardSlider{ nullptr };
+        bool m_settingSlider = false;       // значение меняем мы сами, а не пользователь
+        bool m_userSeeking = false;         // пользователь двигает ползунок, перемотка ещё не отправлена
+        bool m_pointerDown = false;
+        ULONGLONG m_lastUserChangeTick = 0;
+        ULONGLONG m_seekHoldUntil = 0;      // до этого момента показываем выбранную позицию, а не данные плеера
+        double m_seekValue = 0;
+        wuxc::Button m_cardShuffle{ nullptr };
+        wuxc::Button m_cardRepeat{ nullptr };
+        wuxc::FontIcon m_cardRepeatIcon{ nullptr };
         wuxc::TextBlock m_cardElapsed{ nullptr };
         wuxc::TextBlock m_cardTotal{ nullptr };
         wuxc::Button m_cardPrevious{ nullptr };

@@ -11,6 +11,9 @@ namespace barkit
         constexpr wchar_t kGlyphNext[] = L"\xE893";
         constexpr wchar_t kGlyphPlay[] = L"\xE768";
         constexpr wchar_t kGlyphPause[] = L"\xE769";
+        constexpr wchar_t kGlyphShuffle[] = L"\xE8B1";
+        constexpr wchar_t kGlyphRepeatAll[] = L"\xE8EE";
+        constexpr wchar_t kGlyphRepeatOne[] = L"\xE8ED";
 
         constexpr double kArtSize = 30;
         constexpr double kButtonSize = 28;
@@ -394,10 +397,54 @@ namespace barkit
         header.Children().Append(texts);
 
         // --- полоса прогресса со временем
-        m_cardProgress = wuxc::ProgressBar();
-        m_cardProgress.Minimum(0);
-        m_cardProgress.Maximum(1);
-        m_cardProgress.HorizontalAlignment(wux::HorizontalAlignment::Stretch);
+        const std::weak_ptr<bool> alive = m_alive;
+
+        // Ползунок: значение — секунды от начала трека. Перемотку отправляем плееру не на каждое
+        // движение, а когда пользователь отпустил ползунок (или перестал нажимать стрелки).
+        m_cardSlider = wuxc::Slider();
+        m_cardSlider.Minimum(0);
+        m_cardSlider.Maximum(1);
+        m_cardSlider.StepFrequency(1);
+        m_cardSlider.IsThumbToolTipEnabled(false);
+        m_cardSlider.HorizontalAlignment(wux::HorizontalAlignment::Stretch);
+        m_cardSlider.ValueChanged([this, alive](auto&&, auto&&)
+            {
+                const auto token = alive.lock();
+                if (!token || !*token || m_settingSlider)
+                {
+                    return;
+                }
+                m_userSeeking = true;
+                m_lastUserChangeTick = GetTickCount64();
+                SetText(m_cardElapsed, FormatTime(m_cardSlider.Value()));
+            });
+
+        // Slider сам обрабатывает нажатия и помечает события обработанными, поэтому подписываемся
+        // через AddHandler с handledEventsToo = true.
+        const auto pressed = wux::Input::PointerEventHandler([this, alive](auto&&, auto&&)
+            {
+                const auto token = alive.lock();
+                if (token && *token)
+                {
+                    m_pointerDown = true;
+                }
+            });
+        const auto released = wux::Input::PointerEventHandler([this, alive](auto&&, auto&&)
+            {
+                const auto token = alive.lock();
+                if (token && *token)
+                {
+                    m_pointerDown = false;
+                    if (m_userSeeking)
+                    {
+                        CommitSeek();
+                    }
+                }
+            });
+        m_cardSlider.AddHandler(wux::UIElement::PointerPressedEvent(), winrt::box_value(pressed), true);
+        m_cardSlider.AddHandler(wux::UIElement::PointerReleasedEvent(), winrt::box_value(released), true);
+        m_cardSlider.AddHandler(wux::UIElement::PointerCaptureLostEvent(), winrt::box_value(released), true);
+        m_cardSlider.AddHandler(wux::UIElement::PointerCanceledEvent(), winrt::box_value(released), true);
 
         m_cardElapsed = MakeCardText(11, 0.7);
         m_cardTotal = MakeCardText(11, 0.7);
@@ -409,7 +456,7 @@ namespace barkit
         m_cardTimeline = wuxc::StackPanel();
         m_cardTimeline.Orientation(wuxc::Orientation::Vertical);
         m_cardTimeline.Spacing(4);
-        m_cardTimeline.Children().Append(m_cardProgress);
+        m_cardTimeline.Children().Append(m_cardSlider);
         m_cardTimeline.Children().Append(times);
 
         // --- кнопки
@@ -421,13 +468,21 @@ namespace barkit
         m_cardPlay.Click([](auto&&, auto&&) { MediaController::Instance().TogglePlayPause(); });
         m_cardNext.Click([](auto&&, auto&&) { MediaController::Instance().Next(); });
 
+        m_cardRepeatIcon = MakeIcon(kGlyphRepeatAll, 14);
+        m_cardShuffle = MakeButton(MakeIcon(kGlyphShuffle, 14), L"Случайный порядок", kCardButtonSize);
+        m_cardRepeat = MakeButton(m_cardRepeatIcon, L"Повтор", kCardButtonSize);
+        m_cardShuffle.Click([](auto&&, auto&&) { MediaController::Instance().ToggleShuffle(); });
+        m_cardRepeat.Click([](auto&&, auto&&) { MediaController::Instance().CycleRepeat(); });
+
         wuxc::StackPanel buttons;
         buttons.Orientation(wuxc::Orientation::Horizontal);
-        buttons.Spacing(12);
+        buttons.Spacing(8);
         buttons.HorizontalAlignment(wux::HorizontalAlignment::Center);
+        buttons.Children().Append(m_cardShuffle);
         buttons.Children().Append(m_cardPrevious);
         buttons.Children().Append(m_cardPlay);
         buttons.Children().Append(m_cardNext);
+        buttons.Children().Append(m_cardRepeat);
 
         wuxc::StackPanel content;
         content.Orientation(wuxc::Orientation::Vertical);
@@ -442,7 +497,6 @@ namespace barkit
         // Окно панели задач высотой всего в саму панель: без этого карточке негде было бы показаться.
         m_flyout.ShouldConstrainToRootBounds(false);
 
-        const std::weak_ptr<bool> alive = m_alive;
         m_flyout.Opened([this, alive](auto&&, auto&&)
             {
                 const auto token = alive.lock();
@@ -458,6 +512,8 @@ namespace barkit
                 {
                     m_flyoutOpen = false;
                     m_flyoutClosedTick = GetTickCount64();
+                    m_userSeeking = false;
+                    m_pointerDown = false;
                 }
             });
 
@@ -599,6 +655,37 @@ namespace barkit
             m_cardPlay.IsEnabled(state.canToggle);
         }
 
+        // Включённый режим показываем подсветкой кнопки; «повтор одного трека» — ещё и своим значком.
+        const auto setToggle = [](wuxc::Button const& button, bool enabled, bool active)
+            {
+                if (button.IsEnabled() != enabled)
+                {
+                    button.IsEnabled(enabled);
+                }
+                // Текущее состояние подсветки храним в Tag, чтобы не пересоздавать кисть на каждом проходе.
+                const int wanted = active ? 1 : 0;
+                if (winrt::unbox_value_or<int32_t>(button.Tag(), -1) != wanted)
+                {
+                    button.Tag(winrt::box_value<int32_t>(wanted));
+                    button.Opacity(active ? 1.0 : 0.55);
+                    button.Background(wuxm::SolidColorBrush(winrt::Windows::UI::Color{
+                        static_cast<uint8_t>(active ? 0x40 : 0x00), 0x80, 0x80, 0x80 }));
+                }
+            };
+        setToggle(m_cardShuffle, state.canShuffle, state.shuffle);
+        setToggle(m_cardRepeat, state.canRepeat, state.repeatMode != 0);
+        const wchar_t* repeatGlyph = state.repeatMode == 1 ? kGlyphRepeatOne : kGlyphRepeatAll;
+        if (m_cardRepeatIcon.Glyph() != repeatGlyph)
+        {
+            m_cardRepeatIcon.Glyph(repeatGlyph);
+        }
+        const wchar_t* repeatTip = state.repeatMode == 1 ? L"Повтор: один трек"
+            : state.repeatMode == 2 ? L"Повтор: весь список" : L"Повтор: выключен";
+        if (winrt::unbox_value_or<winrt::hstring>(wuxc::ToolTipService::GetToolTip(m_cardRepeat), L"") != repeatTip)
+        {
+            wuxc::ToolTipService::SetToolTip(m_cardRepeat, winrt::box_value(winrt::hstring(repeatTip)));
+        }
+
         // Не все плееры сообщают длительность и позицию — тогда полосу просто не показываем.
         SetVisible(m_cardTimeline, state.hasTimeline);
         if (!state.hasTimeline)
@@ -619,13 +706,54 @@ namespace barkit
         }
         position = std::clamp(position, 0.0, duration);
 
-        const double fraction = duration > 0 ? position / duration : 0.0;
-        if (std::abs(m_cardProgress.Value() - fraction) > 0.002)
+        if (std::abs(m_cardSlider.Maximum() - duration) > 0.5)
         {
-            m_cardProgress.Value(fraction);
+            m_settingSlider = true;
+            m_cardSlider.Maximum(duration);
+            m_settingSlider = false;
         }
-        SetText(m_cardElapsed, FormatTime(position));
+        if (m_cardSlider.IsEnabled() != state.canSeek)
+        {
+            m_cardSlider.IsEnabled(state.canSeek); // плеер не умеет перематывать — ползунок только показывает позицию
+        }
         SetText(m_cardTotal, FormatTime(duration));
+
+        const ULONGLONG now = GetTickCount64();
+        if (m_userSeeking)
+        {
+            // Мышью перемотка отправляется при отпускании; для клавиатуры — после короткой паузы.
+            if (!m_pointerDown && now - m_lastUserChangeTick > 400)
+            {
+                CommitSeek();
+            }
+            return; // пока пользователь двигает ползунок, не перебиваем его данными плеера
+        }
+
+        // Сразу после перемотки плеер ещё может прислать старую позицию — не даём ползунку прыгнуть назад.
+        if (now < m_seekHoldUntil)
+        {
+            position = m_seekValue;
+        }
+        SetSliderValue(position);
+        SetText(m_cardElapsed, FormatTime(position));
+    }
+
+    void MediaWidget::SetSliderValue(double value)
+    {
+        if (std::abs(m_cardSlider.Value() - value) > 0.4)
+        {
+            m_settingSlider = true;
+            m_cardSlider.Value(value);
+            m_settingSlider = false;
+        }
+    }
+
+    void MediaWidget::CommitSeek()
+    {
+        m_userSeeking = false;
+        m_seekValue = m_cardSlider.Value();
+        m_seekHoldUntil = GetTickCount64() + 1500;
+        MediaController::Instance().Seek(m_seekValue);
     }
 
     // Трей и кнопка виджетов лежат не внутри сетки панели, а рядом с ней, поэтому ищем их от корня дерева.

@@ -150,6 +150,28 @@ namespace barkit
                         next.canPrevious = controls.IsPreviousEnabled();
                         next.canNext = controls.IsNextEnabled();
                         next.canToggle = controls.IsPlayPauseToggleEnabled() || controls.IsPlayEnabled() || controls.IsPauseEnabled();
+                        next.canSeek = controls.IsPlaybackPositionEnabled();
+                        next.canShuffle = controls.IsShuffleEnabled();
+                        next.canRepeat = controls.IsRepeatEnabled();
+                    }
+                    if (auto shuffle = info.IsShuffleActive())
+                    {
+                        next.shuffle = shuffle.Value();
+                    }
+                    if (auto repeat = info.AutoRepeatMode())
+                    {
+                        switch (repeat.Value())
+                        {
+                        case winrt::Windows::Media::MediaPlaybackAutoRepeatMode::Track:
+                            next.repeatMode = 1;
+                            break;
+                        case winrt::Windows::Media::MediaPlaybackAutoRepeatMode::List:
+                            next.repeatMode = 2;
+                            break;
+                        default:
+                            next.repeatMode = 0;
+                            break;
+                        }
                     }
                     if (auto rate = info.PlaybackRate())
                     {
@@ -224,6 +246,7 @@ namespace barkit
         if (auto timeline = session.GetTimelineProperties())
         {
             const auto start = timeline.StartTime();
+            state.timelineStart = start;
             state.duration = timeline.EndTime() - start;
             state.position = timeline.Position() - start;
             state.positionUpdated = timeline.LastUpdatedTime();
@@ -255,6 +278,7 @@ namespace barkit
                     m_state.position = timeline.position;
                     m_state.duration = timeline.duration;
                     m_state.positionUpdated = timeline.positionUpdated;
+                    m_state.timelineStart = timeline.timelineStart;
                     if (m_onChanged)
                     {
                         m_onChanged();
@@ -264,6 +288,62 @@ namespace barkit
         catch (...)
         {
             LogCurrentException(L"MediaController::RefreshTimeline");
+        }
+    }
+
+    void MediaController::Seek(double seconds) noexcept
+    {
+        try
+        {
+            auto session = CurrentSession();
+            if (!session || !m_state.hasTimeline)
+            {
+                return;
+            }
+            const auto offset = std::chrono::duration_cast<wf::TimeSpan>(std::chrono::duration<double>(std::max(0.0, seconds)));
+            session.TryChangePlaybackPositionAsync((m_state.timelineStart + offset).count());
+
+            // Не ждём подтверждения от плеера: сразу считаем позицию от новой точки.
+            m_state.position = offset;
+            m_state.positionUpdated = winrt::clock::now();
+        }
+        catch (...)
+        {
+            LogCurrentException(L"MediaController::Seek");
+        }
+    }
+
+    void MediaController::CycleRepeat() noexcept
+    {
+        try
+        {
+            using winrt::Windows::Media::MediaPlaybackAutoRepeatMode;
+            if (auto session = CurrentSession())
+            {
+                const auto next = m_state.repeatMode == 0 ? MediaPlaybackAutoRepeatMode::Track
+                    : m_state.repeatMode == 1 ? MediaPlaybackAutoRepeatMode::List
+                    : MediaPlaybackAutoRepeatMode::None;
+                session.TryChangeAutoRepeatModeAsync(next);
+            }
+        }
+        catch (...)
+        {
+            LogCurrentException(L"MediaController::CycleRepeat");
+        }
+    }
+
+    void MediaController::ToggleShuffle() noexcept
+    {
+        try
+        {
+            if (auto session = CurrentSession())
+            {
+                session.TryChangeShuffleActiveAsync(!m_state.shuffle);
+            }
+        }
+        catch (...)
+        {
+            LogCurrentException(L"MediaController::ToggleShuffle");
         }
     }
 
