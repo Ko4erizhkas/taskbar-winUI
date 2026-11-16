@@ -12,6 +12,15 @@ namespace barkit
         bool canNext = false;
         bool canToggle = false;
         wuxm::ImageSource art{ nullptr };
+
+        // Для выпадающей карточки. Позицию плееры сообщают не непрерывно, а «на момент positionUpdated»,
+        // поэтому текущую приходится досчитывать (см. MediaWidget).
+        winrt::hstring album;
+        bool hasTimeline = false;
+        wf::TimeSpan position{};
+        wf::TimeSpan duration{};
+        wf::DateTime positionUpdated{};
+        double playbackRate = 1.0;
     };
 
     // Обёртка над системным API «что сейчас играет» (GlobalSystemMediaTransportControls).
@@ -41,6 +50,8 @@ namespace barkit
 
         winrt::fire_and_forget Initialize();
         winrt::fire_and_forget Refresh();
+        void RefreshTimeline() noexcept;
+        static void ReadTimeline(Session const& session, MediaState& state);
         void AttachCurrentSession() noexcept;
         Session CurrentSession();
 
@@ -56,6 +67,7 @@ namespace barkit
         std::wstring m_source;
         Session::MediaPropertiesChanged_revoker m_propertiesRevoker;
         Session::PlaybackInfoChanged_revoker m_playbackRevoker;
+        Session::TimelinePropertiesChanged_revoker m_timelineRevoker;
 
         std::atomic<uint64_t> m_generation{ 0 };
         MediaState m_state;

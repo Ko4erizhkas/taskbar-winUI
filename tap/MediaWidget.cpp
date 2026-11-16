@@ -16,21 +16,21 @@ namespace barkit
         constexpr double kButtonSize = 28;
         constexpr double kEdgeGap = 8;
 
-        wuxc::FontIcon MakeIcon(const wchar_t* glyph)
+        wuxc::FontIcon MakeIcon(const wchar_t* glyph, double fontSize = 12)
         {
             wuxc::FontIcon icon;
             icon.FontFamily(wuxm::FontFamily(L"Segoe Fluent Icons,Segoe MDL2 Assets"));
-            icon.FontSize(12);
+            icon.FontSize(fontSize);
             icon.Glyph(glyph);
             return icon;
         }
 
-        wuxc::Button MakeButton(wuxc::FontIcon const& icon, const wchar_t* tooltip)
+        wuxc::Button MakeButton(wuxc::FontIcon const& icon, const wchar_t* tooltip, double size = kButtonSize)
         {
             wuxc::Button button;
             button.Content(icon);
-            button.Width(kButtonSize);
-            button.Height(kButtonSize);
+            button.Width(size);
+            button.Height(size);
             button.MinWidth(0);
             button.MinHeight(0);
             button.Padding(wux::Thickness{ 0, 0, 0, 0 });
@@ -56,6 +56,11 @@ namespace barkit
 
     MediaWidget::MediaWidget(wux::FrameworkElement const& frame) : m_frame(frame)
     {
+    }
+
+    MediaWidget::~MediaWidget()
+    {
+        *m_alive = false;
     }
 
     bool MediaWidget::IsFor(wux::FrameworkElement const& frame) const
@@ -92,6 +97,10 @@ namespace barkit
     {
         try
         {
+            if (m_flyout && m_flyoutOpen)
+            {
+                m_flyout.Hide();
+            }
             if (m_root)
             {
                 if (auto host = m_host.get())
@@ -172,8 +181,31 @@ namespace barkit
         m_buttons.Children().Append(m_play);
         m_buttons.Children().Append(m_next);
 
-        m_panel.Children().Append(m_artBorder);
-        m_panel.Children().Append(m_textPanel);
+        // Обложка и текст — одна «кнопка»: щелчок по ней открывает карточку. Прозрачный фон нужен,
+        // чтобы щелчки ловились и в промежутках между элементами.
+        m_info = wuxc::StackPanel();
+        m_info.Orientation(wuxc::Orientation::Horizontal);
+        m_info.Spacing(8);
+        m_info.Background(wuxm::SolidColorBrush(winrt::Windows::UI::Color{ 0, 0, 0, 0 }));
+        m_info.Children().Append(m_artBorder);
+        m_info.Children().Append(m_textPanel);
+        m_info.Tapped([this, alive = std::weak_ptr<bool>(m_alive)](auto&&, auto&&)
+            {
+                const auto token = alive.lock();
+                if (token && *token)
+                {
+                    try
+                    {
+                        ToggleFlyout();
+                    }
+                    catch (...)
+                    {
+                        LogCurrentException(L"MediaWidget::ToggleFlyout");
+                    }
+                }
+            });
+
+        m_panel.Children().Append(m_info);
         m_panel.Children().Append(m_buttons);
         m_root.Children().Append(m_panel);
 
@@ -191,6 +223,10 @@ namespace barkit
 
         if (!wanted || !state.hasSession)
         {
+            if (m_flyout && m_flyoutOpen)
+            {
+                m_flyout.Hide();
+            }
             if (m_root)
             {
                 SetVisible(m_root, false);
@@ -216,6 +252,10 @@ namespace barkit
 
         const bool horizontal = IsHorizontal(frame);
         ApplyContent(settings, state, horizontal);
+        if (m_flyoutOpen)
+        {
+            UpdateFlyout(state);
+        }
         SetVisible(m_root, true);
         ApplyPosition(settings, host, horizontal, hints);
     }
@@ -226,6 +266,7 @@ namespace barkit
         if (m_panel.Orientation() != orientation)
         {
             m_panel.Orientation(orientation);
+            m_info.Orientation(orientation);
             m_buttons.Orientation(orientation);
         }
 
@@ -272,6 +313,253 @@ namespace barkit
         {
             wuxc::ToolTipService::SetToolTip(m_panel, tip.empty() ? nullptr : winrt::box_value(tip));
         }
+    }
+
+    // ------------------------------------------------------------------ выпадающая карточка
+
+    namespace
+    {
+        double Seconds(wf::TimeSpan const& span)
+        {
+            return std::chrono::duration<double>(span).count();
+        }
+
+        winrt::hstring FormatTime(double seconds)
+        {
+            const long long total = static_cast<long long>(std::max(0.0, seconds));
+            wchar_t text[32]{};
+            if (total >= 3600)
+            {
+                StringCchPrintfW(text, ARRAYSIZE(text), L"%lld:%02lld:%02lld", total / 3600, (total / 60) % 60, total % 60);
+            }
+            else
+            {
+                StringCchPrintfW(text, ARRAYSIZE(text), L"%lld:%02lld", total / 60, total % 60);
+            }
+            return winrt::hstring(text);
+        }
+
+        wuxc::TextBlock MakeCardText(double fontSize, double opacity)
+        {
+            wuxc::TextBlock block;
+            block.FontSize(fontSize);
+            block.Opacity(opacity);
+            block.TextTrimming(wux::TextTrimming::CharacterEllipsis);
+            block.TextWrapping(wux::TextWrapping::NoWrap);
+            return block;
+        }
+    }
+
+    void MediaWidget::CreateFlyout()
+    {
+        constexpr double kCardWidth = 300;
+        constexpr double kCardArtSize = 88;
+        constexpr double kCardButtonSize = 38;
+
+        // --- обложка и подписи
+        m_cardArtBrush = wuxm::ImageBrush();
+        m_cardArtBrush.Stretch(wuxm::Stretch::UniformToFill);
+        m_cardArt = wuxc::Border();
+        m_cardArt.Width(kCardArtSize);
+        m_cardArt.Height(kCardArtSize);
+        m_cardArt.CornerRadius(wux::CornerRadius{ 6, 6, 6, 6 });
+        m_cardArt.Background(m_cardArtBrush);
+        m_cardArt.VerticalAlignment(wux::VerticalAlignment::Center);
+
+        m_cardTitle = MakeCardText(14, 1.0);
+        m_cardTitle.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+        m_cardTitle.TextWrapping(wux::TextWrapping::Wrap);
+        m_cardTitle.MaxLines(2);
+        m_cardArtist = MakeCardText(12, 0.85);
+        m_cardAlbum = MakeCardText(12, 0.6);
+
+        wuxc::StackPanel texts;
+        texts.Orientation(wuxc::Orientation::Vertical);
+        texts.Spacing(2);
+        texts.VerticalAlignment(wux::VerticalAlignment::Center);
+        texts.Children().Append(m_cardTitle);
+        texts.Children().Append(m_cardArtist);
+        texts.Children().Append(m_cardAlbum);
+
+        wuxc::Grid header;
+        header.ColumnSpacing(12);
+        wuxc::ColumnDefinition artColumn;
+        artColumn.Width(wux::GridLengthHelper::Auto());
+        header.ColumnDefinitions().Append(artColumn);
+        header.ColumnDefinitions().Append(wuxc::ColumnDefinition());
+        wuxc::Grid::SetColumn(m_cardArt, 0);
+        wuxc::Grid::SetColumn(texts, 1);
+        header.Children().Append(m_cardArt);
+        header.Children().Append(texts);
+
+        // --- полоса прогресса со временем
+        m_cardProgress = wuxc::ProgressBar();
+        m_cardProgress.Minimum(0);
+        m_cardProgress.Maximum(1);
+        m_cardProgress.HorizontalAlignment(wux::HorizontalAlignment::Stretch);
+
+        m_cardElapsed = MakeCardText(11, 0.7);
+        m_cardTotal = MakeCardText(11, 0.7);
+        m_cardTotal.HorizontalAlignment(wux::HorizontalAlignment::Right);
+        wuxc::Grid times;
+        times.Children().Append(m_cardElapsed);
+        times.Children().Append(m_cardTotal);
+
+        m_cardTimeline = wuxc::StackPanel();
+        m_cardTimeline.Orientation(wuxc::Orientation::Vertical);
+        m_cardTimeline.Spacing(4);
+        m_cardTimeline.Children().Append(m_cardProgress);
+        m_cardTimeline.Children().Append(times);
+
+        // --- кнопки
+        m_cardPlayIcon = MakeIcon(kGlyphPlay, 16);
+        m_cardPrevious = MakeButton(MakeIcon(kGlyphPrevious, 16), L"Предыдущий трек", kCardButtonSize);
+        m_cardPlay = MakeButton(m_cardPlayIcon, L"Воспроизведение / пауза", kCardButtonSize);
+        m_cardNext = MakeButton(MakeIcon(kGlyphNext, 16), L"Следующий трек", kCardButtonSize);
+        m_cardPrevious.Click([](auto&&, auto&&) { MediaController::Instance().Previous(); });
+        m_cardPlay.Click([](auto&&, auto&&) { MediaController::Instance().TogglePlayPause(); });
+        m_cardNext.Click([](auto&&, auto&&) { MediaController::Instance().Next(); });
+
+        wuxc::StackPanel buttons;
+        buttons.Orientation(wuxc::Orientation::Horizontal);
+        buttons.Spacing(12);
+        buttons.HorizontalAlignment(wux::HorizontalAlignment::Center);
+        buttons.Children().Append(m_cardPrevious);
+        buttons.Children().Append(m_cardPlay);
+        buttons.Children().Append(m_cardNext);
+
+        wuxc::StackPanel content;
+        content.Orientation(wuxc::Orientation::Vertical);
+        content.Width(kCardWidth);
+        content.Spacing(14);
+        content.Children().Append(header);
+        content.Children().Append(m_cardTimeline);
+        content.Children().Append(buttons);
+
+        m_flyout = wuxc::Flyout();
+        m_flyout.Content(content);
+        // Окно панели задач высотой всего в саму панель: без этого карточке негде было бы показаться.
+        m_flyout.ShouldConstrainToRootBounds(false);
+
+        const std::weak_ptr<bool> alive = m_alive;
+        m_flyout.Opened([this, alive](auto&&, auto&&)
+            {
+                const auto token = alive.lock();
+                if (token && *token)
+                {
+                    m_flyoutOpen = true;
+                }
+            });
+        m_flyout.Closed([this, alive](auto&&, auto&&)
+            {
+                const auto token = alive.lock();
+                if (token && *token)
+                {
+                    m_flyoutOpen = false;
+                    m_flyoutClosedTick = GetTickCount64();
+                }
+            });
+
+        BARKIT_LOG(L"Media: flyout created");
+    }
+
+    void MediaWidget::ToggleFlyout()
+    {
+        if (!m_root)
+        {
+            return;
+        }
+        if (!m_flyout)
+        {
+            CreateFlyout();
+        }
+        if (m_flyoutOpen)
+        {
+            m_flyout.Hide();
+            return;
+        }
+        // Щелчок по полю при открытой карточке сначала закрывает её (щелчок «мимо»), а затем приходит сюда —
+        // без этой проверки карточка тут же открылась бы снова.
+        if (GetTickCount64() - m_flyoutClosedTick < 250)
+        {
+            return;
+        }
+
+        const auto& state = MediaController::Instance().State();
+        if (!state.hasSession)
+        {
+            return;
+        }
+        UpdateFlyout(state);
+
+        // Если с этой стороны места нет (панель сверху или справа), XAML сам выберет противоположную.
+        const bool horizontal = IsHorizontal(m_frame.get());
+        m_flyout.Placement(horizontal ? wuxc::Primitives::FlyoutPlacementMode::Top : wuxc::Primitives::FlyoutPlacementMode::Right);
+        m_flyout.ShowAt(m_root);
+    }
+
+    void MediaWidget::UpdateFlyout(MediaState const& state)
+    {
+        if (!m_flyout)
+        {
+            return;
+        }
+
+        SetText(m_cardTitle, state.title.empty() ? winrt::hstring(L"Без названия") : state.title);
+        SetText(m_cardArtist, state.artist);
+        SetText(m_cardAlbum, state.album);
+
+        if (state.art && m_cardArtBrush.ImageSource() != state.art)
+        {
+            m_cardArtBrush.ImageSource(state.art);
+        }
+        SetVisible(m_cardArt, static_cast<bool>(state.art));
+
+        const wchar_t* glyph = state.playing ? kGlyphPause : kGlyphPlay;
+        if (m_cardPlayIcon.Glyph() != glyph)
+        {
+            m_cardPlayIcon.Glyph(glyph);
+        }
+        if (m_cardPrevious.IsEnabled() != state.canPrevious)
+        {
+            m_cardPrevious.IsEnabled(state.canPrevious);
+        }
+        if (m_cardNext.IsEnabled() != state.canNext)
+        {
+            m_cardNext.IsEnabled(state.canNext);
+        }
+        if (m_cardPlay.IsEnabled() != state.canToggle)
+        {
+            m_cardPlay.IsEnabled(state.canToggle);
+        }
+
+        // Не все плееры сообщают длительность и позицию — тогда полосу просто не показываем.
+        SetVisible(m_cardTimeline, state.hasTimeline);
+        if (!state.hasTimeline)
+        {
+            return;
+        }
+
+        const double duration = Seconds(state.duration);
+        double position = Seconds(state.position);
+        if (state.playing && state.positionUpdated.time_since_epoch().count() > 0)
+        {
+            // Плеер сообщил позицию на момент positionUpdated; с тех пор трек продолжал играть.
+            const double elapsed = Seconds(winrt::clock::now() - state.positionUpdated);
+            if (elapsed > 0 && elapsed < duration)
+            {
+                position += elapsed * state.playbackRate;
+            }
+        }
+        position = std::clamp(position, 0.0, duration);
+
+        const double fraction = duration > 0 ? position / duration : 0.0;
+        if (std::abs(m_cardProgress.Value() - fraction) > 0.002)
+        {
+            m_cardProgress.Value(fraction);
+        }
+        SetText(m_cardElapsed, FormatTime(position));
+        SetText(m_cardTotal, FormatTime(duration));
     }
 
     // Трей и кнопка виджетов лежат не внутри сетки панели, а рядом с ней, поэтому ищем их от корня дерева.
