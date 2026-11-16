@@ -26,6 +26,7 @@ namespace winrt::BarKit::implementation
         void OnSettingNumber(Windows::Foundation::IInspectable const& sender, Microsoft::UI::Xaml::Controls::NumberBoxValueChangedEventArgs const& args);
         void OnTintColorChanged(Windows::Foundation::IInspectable const& sender, Microsoft::UI::Xaml::Controls::ColorChangedEventArgs const& args);
         void OnMediaSourceSelected(Windows::Foundation::IInspectable const& sender, Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const& args);
+        void OnCardTintColorChanged(Windows::Foundation::IInspectable const& sender, Microsoft::UI::Xaml::Controls::ColorChangedEventArgs const& args);
         void OnAutostartToggled(Windows::Foundation::IInspectable const& sender, Microsoft::UI::Xaml::RoutedEventArgs const& args);
         void OnReconnectClick(Windows::Foundation::IInspectable const& sender, Microsoft::UI::Xaml::RoutedEventArgs const& args);
         void OnDumpTreeClick(Windows::Foundation::IInspectable const& sender, Microsoft::UI::Xaml::RoutedEventArgs const& args);

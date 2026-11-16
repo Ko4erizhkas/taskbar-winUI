@@ -20,6 +20,9 @@ namespace barkit
 
         // ---------------------------------------------------------------- наблюдатель за деревом
 
+        struct TreeWatcher;
+        std::atomic<TreeWatcher*> g_currentWatcher{ nullptr }; // для потока подписки: «я всё ещё актуален?»
+
         struct TreeWatcher : winrt::implements<TreeWatcher, IVisualTreeServiceCallback2, winrt::non_agile>
         {
             explicit TreeWatcher(winrt::com_ptr<IXamlDiagnostics> diagnostics) : m_diagnostics(std::move(diagnostics))
@@ -107,24 +110,53 @@ namespace barkit
                 winrt::com_ptr<TreeWatcher> self;
                 self.attach(static_cast<TreeWatcher*>(parameter));
 
+                // Подписка может не удаться с первого раза (XAML возвращает E_UNEXPECTED, если дерево
+                // менялось во время перечисления), поэтому пробуем несколько раз.
                 HRESULT hr = E_NOINTERFACE;
-                try
+                for (int attempt = 0; attempt < 3; ++attempt)
                 {
-                    winrt::com_ptr<IVisualTreeService3> service;
-                    hr = self->m_diagnostics->QueryInterface(IID_PPV_ARGS(service.put()));
+                    if (g_currentWatcher.load() != self.get())
+                    {
+                        return 0; // нас уже заменил более новый наблюдатель
+                    }
+                    try
+                    {
+                        winrt::com_ptr<IVisualTreeService3> service;
+                        hr = self->m_diagnostics->QueryInterface(IID_PPV_ARGS(service.put()));
+                        if (SUCCEEDED(hr))
+                        {
+                            TaskbarManager::Instance().BeginAdvise();
+                            hr = service->AdviseVisualTreeChange(self.get());
+                            TaskbarManager::Instance().EndAdvise();
+                            if (FAILED(hr))
+                            {
+                                service->UnadviseVisualTreeChange(self.get());
+                            }
+                        }
+                    }
+                    catch (...)
+                    {
+                        TaskbarManager::Instance().EndAdvise();
+                        LogCurrentException(L"TreeWatcher::AdviseThread");
+                        hr = E_FAIL;
+                    }
+
+                    BARKIT_LOG(L"TAP: AdviseVisualTreeChange (attempt %d) -> 0x%08X", attempt + 1, static_cast<unsigned int>(hr));
                     if (SUCCEEDED(hr))
                     {
-                        hr = service->AdviseVisualTreeChange(self.get());
+                        break;
                     }
-                }
-                catch (...)
-                {
-                    LogCurrentException(L"TreeWatcher::AdviseThread");
-                    hr = E_FAIL;
+                    Sleep(700);
                 }
 
-                BARKIT_LOG(L"TAP: AdviseVisualTreeChange -> 0x%08X", static_cast<unsigned int>(hr));
-                if (SUCCEEDED(hr))
+                // Даже при ошибке подписки XAML успевает показать нам элементы панели, и всё работает
+                // (за новыми панелями следит таймер). Поэтому «подключено» — это «панель найдена».
+                const bool ready = TaskbarManager::Instance().IsReady();
+                if (FAILED(hr) && ready)
+                {
+                    BARKIT_LOG(L"TAP: subscription failed, but the taskbar was found - working without tree notifications");
+                }
+                if (SUCCEEDED(hr) || ready)
                 {
                     // Сообщаем приложению, что DLL работает в этом explorer.exe (дескриптор намеренно не закрываем).
                     wchar_t modulePath[MAX_PATH]{};
@@ -245,6 +277,7 @@ namespace barkit
 
                     g_watcher = winrt::make_self<TreeWatcher>(std::move(diagnostics));
                     g_watcherOwner = this;
+                    g_currentWatcher = g_watcher.get();
                     g_watcher->Start();
                     return S_OK;
                 }

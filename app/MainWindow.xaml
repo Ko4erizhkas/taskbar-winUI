@@ -281,6 +281,74 @@
                     </Grid>
                 </Border>
 
+                <!-- ===== Карточка «Сейчас играет» ===== -->
+                <TextBlock Text="Выпадающая карточка" Style="{StaticResource Section}" />
+
+                <Border Style="{StaticResource Card}">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Оформление" />
+                            <TextBlock Style="{StaticResource Hint}" Text="Карточка открывается по щелчку на поле «Сейчас играет». Изменения видны при следующем открытии." />
+                        </StackPanel>
+                        <ComboBox x:Name="CardStyleBox" Grid.Column="1" MinWidth="280" SelectionChanged="OnSettingSelected">
+                            <ComboBoxItem Content="Системное" />
+                            <ComboBoxItem Content="Как у панели задач" />
+                            <ComboBoxItem Content="Своё" />
+                        </ComboBox>
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Фон карточки" VerticalAlignment="Center" />
+                        <ComboBox x:Name="CardAppearanceBox" Grid.Column="1" MinWidth="280" SelectionChanged="OnSettingSelected">
+                            <ComboBoxItem Content="Полностью прозрачный" />
+                            <ComboBoxItem Content="Полупрозрачный цвет" />
+                            <ComboBoxItem Content="Акрил (размытие с оттенком)" />
+                        </ComboBox>
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Цвет карточки" VerticalAlignment="Center" />
+                        <Button x:Name="CardTintButton" Grid.Column="1" Padding="4">
+                            <Border x:Name="CardTintSwatch" Width="56" Height="24" CornerRadius="3"
+                                    BorderThickness="1" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" />
+                            <Button.Flyout>
+                                <Flyout>
+                                    <ColorPicker x:Name="CardTintPicker" IsAlphaEnabled="False" IsMoreButtonVisible="False"
+                                                 ColorChanged="OnCardTintColorChanged" />
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Плотность цвета карточки, %" VerticalAlignment="Center" />
+                        <Slider x:Name="CardOpacitySlider" Grid.Column="1" Width="280" Minimum="0" Maximum="100" StepFrequency="1"
+                                ValueChanged="OnSettingSlider" />
+                    </Grid>
+                </Border>
+
                 <!-- ===== Общее ===== -->
                 <TextBlock Text="Общее" Style="{StaticResource Section}" />
 

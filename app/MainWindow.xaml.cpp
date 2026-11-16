@@ -135,6 +135,13 @@ namespace winrt::BarKit::implementation
         MediaArtToggle().IsOn(m_settings.mediaShowArt);
         MediaControlsToggle().IsOn(m_settings.mediaShowControls);
 
+        CardStyleBox().SelectedIndex(static_cast<int32_t>(m_settings.cardStyle));
+        CardAppearanceBox().SelectedIndex(static_cast<int32_t>(m_settings.cardAppearance) - 1); // без пункта «Системный»
+        CardOpacitySlider().Value(m_settings.cardOpacity);
+        const auto cardTint = ColorFromRgb(m_settings.cardColor);
+        CardTintPicker().Color(cardTint);
+        CardTintSwatch().Background(Media::SolidColorBrush(cardTint));
+
         const bool autostart = IsAutostartEnabled();
         if (autostart)
         {
@@ -178,6 +185,19 @@ namespace winrt::BarKit::implementation
         m_settings.mediaShowArt = MediaArtToggle().IsOn();
         m_settings.mediaShowControls = MediaControlsToggle().IsOn();
 
+        const int32_t cardStyle = CardStyleBox().SelectedIndex();
+        if (cardStyle >= 0 && cardStyle <= 2)
+        {
+            m_settings.cardStyle = static_cast<barkit::CardStyle>(cardStyle);
+        }
+        const int32_t cardAppearance = CardAppearanceBox().SelectedIndex();
+        if (cardAppearance >= 0 && cardAppearance <= 2)
+        {
+            m_settings.cardAppearance = static_cast<barkit::Appearance>(cardAppearance + 1);
+        }
+        m_settings.cardOpacity = RoundToDword(CardOpacitySlider().Value(), m_settings.cardOpacity);
+        m_settings.cardColor = RgbFromColor(CardTintPicker().Color());
+
         m_settings.enabled = true;
         m_settings.hostPid = GetCurrentProcessId();
         barkit::SaveSettings(m_settings);
@@ -204,6 +224,14 @@ namespace winrt::BarKit::implementation
         MediaWidthSlider().IsEnabled(media);
         MediaArtToggle().IsEnabled(media);
         MediaControlsToggle().IsEnabled(media);
+
+        // Свои фон, цвет и плотность карточки имеют смысл только в режиме «Своё».
+        const bool customCard = media && CardStyleBox().SelectedIndex() == static_cast<int32_t>(barkit::CardStyle::Custom);
+        const bool cardTinted = customCard && CardAppearanceBox().SelectedIndex() != 0;
+        CardStyleBox().IsEnabled(media);
+        CardAppearanceBox().IsEnabled(customCard);
+        CardTintButton().IsEnabled(cardTinted);
+        CardOpacitySlider().IsEnabled(cardTinted);
     }
 
     // ---------------------------------------------------------------- выбор медиа-приложения
@@ -430,6 +458,16 @@ namespace winrt::BarKit::implementation
             return;
         }
         TintSwatch().Background(Media::SolidColorBrush(args.NewColor()));
+        SaveFromControls();
+    }
+
+    void MainWindow::OnCardTintColorChanged(Windows::Foundation::IInspectable const&, ColorChangedEventArgs const& args)
+    {
+        if (!m_ready)
+        {
+            return;
+        }
+        CardTintSwatch().Background(Media::SolidColorBrush(args.NewColor()));
         SaveFromControls();
     }
 

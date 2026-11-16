@@ -237,7 +237,10 @@ namespace barkit
             });
 
         BARKIT_LOG(L"Background part registered: %s", isStroke ? L"stroke" : L"fill");
-        ApplyAppearance(*part);
+        if (!m_advising)
+        {
+            ApplyAppearance(*part);
+        }
     }
 
     void TaskbarManager::RegisterButton(wux::FrameworkElement const& button)
@@ -368,6 +371,44 @@ namespace barkit
         }
     }
 
+    void TaskbarManager::BeginAdvise() noexcept
+    {
+        m_adviseStartTick = GetTickCount64();
+        m_advising = true;
+    }
+
+    void TaskbarManager::EndAdvise() noexcept
+    {
+        m_advising = false;
+        try
+        {
+            if (!m_ready)
+            {
+                return;
+            }
+            // Всё, что отложили на время перечисления дерева, применяем сейчас.
+            m_dispatcher.RunAsync(wuc::CoreDispatcherPriority::Normal, [this]()
+                {
+                    try
+                    {
+                        for (auto const& part : m_backgrounds)
+                        {
+                            ApplyAppearance(*part);
+                        }
+                    }
+                    catch (...)
+                    {
+                        ReportError(L"EndAdvise");
+                    }
+                    UpdateAll();
+                });
+        }
+        catch (...)
+        {
+            // Не страшно: подхватит таймер.
+        }
+    }
+
     void TaskbarManager::OnTimerTick()
     {
         if (m_settingsDirty.exchange(false))
@@ -438,6 +479,11 @@ namespace barkit
     {
         m_lastUpdateTick = GetTickCount64();
         if (m_idle)
+        {
+            return;
+        }
+        // Перечисление дерева занимает миллисекунды; если флаг «завис» — не даём ему остановить всю работу.
+        if (m_advising && GetTickCount64() - m_adviseStartTick < 5000)
         {
             return;
         }

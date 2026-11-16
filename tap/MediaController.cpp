@@ -108,6 +108,7 @@ namespace barkit
                 std::scoped_lock guard(m_mutex);
                 m_propertiesRevoker.revoke();
                 m_playbackRevoker.revoke();
+                m_timelineRevoker.revoke();
                 m_session = session;
                 if (session)
                 {
@@ -115,6 +116,8 @@ namespace barkit
                         [this](auto&&, auto&&) { Refresh(); });
                     m_playbackRevoker = session.PlaybackInfoChanged(winrt::auto_revoke,
                         [this](auto&&, auto&&) { Refresh(); });
+                    m_timelineRevoker = session.TimelinePropertiesChanged(winrt::auto_revoke,
+                        [this](auto&&, auto&&) { RefreshTimeline(); });
                 }
             }
             Refresh();
@@ -147,13 +150,41 @@ namespace barkit
                         next.canPrevious = controls.IsPreviousEnabled();
                         next.canNext = controls.IsNextEnabled();
                         next.canToggle = controls.IsPlayPauseToggleEnabled() || controls.IsPlayEnabled() || controls.IsPauseEnabled();
+                        next.canSeek = controls.IsPlaybackPositionEnabled();
+                        next.canShuffle = controls.IsShuffleEnabled();
+                        next.canRepeat = controls.IsRepeatEnabled();
+                    }
+                    if (auto shuffle = info.IsShuffleActive())
+                    {
+                        next.shuffle = shuffle.Value();
+                    }
+                    if (auto repeat = info.AutoRepeatMode())
+                    {
+                        switch (repeat.Value())
+                        {
+                        case winrt::Windows::Media::MediaPlaybackAutoRepeatMode::Track:
+                            next.repeatMode = 1;
+                            break;
+                        case winrt::Windows::Media::MediaPlaybackAutoRepeatMode::List:
+                            next.repeatMode = 2;
+                            break;
+                        default:
+                            next.repeatMode = 0;
+                            break;
+                        }
+                    }
+                    if (auto rate = info.PlaybackRate())
+                    {
+                        next.playbackRate = rate.Value();
                     }
                 }
+                ReadTimeline(session, next);
 
                 if (auto properties = co_await session.TryGetMediaPropertiesAsync())
                 {
                     next.title = properties.Title();
                     next.artist = properties.Artist();
+                    next.album = properties.AlbumTitle();
                     if (auto thumbnail = properties.Thumbnail())
                     {
                         try
@@ -207,6 +238,112 @@ namespace barkit
         catch (...)
         {
             LogCurrentException(L"MediaController::Refresh");
+        }
+    }
+
+    void MediaController::ReadTimeline(Session const& session, MediaState& state)
+    {
+        if (auto timeline = session.GetTimelineProperties())
+        {
+            const auto start = timeline.StartTime();
+            state.timelineStart = start;
+            state.duration = timeline.EndTime() - start;
+            state.position = timeline.Position() - start;
+            state.positionUpdated = timeline.LastUpdatedTime();
+            state.hasTimeline = state.duration.count() > 0;
+        }
+    }
+
+    // Позиция меняется часто (некоторые плееры шлют её каждую секунду), поэтому здесь —
+    // облегчённый путь без повторного чтения названия и обложки.
+    void MediaController::RefreshTimeline() noexcept
+    {
+        try
+        {
+            auto session = CurrentSession();
+            if (!session || !m_dispatcher)
+            {
+                return;
+            }
+            MediaState timeline;
+            ReadTimeline(session, timeline);
+
+            m_dispatcher.RunAsync(wuc::CoreDispatcherPriority::Normal, [this, timeline]()
+                {
+                    if (!m_state.hasSession)
+                    {
+                        return;
+                    }
+                    m_state.hasTimeline = timeline.hasTimeline;
+                    m_state.position = timeline.position;
+                    m_state.duration = timeline.duration;
+                    m_state.positionUpdated = timeline.positionUpdated;
+                    m_state.timelineStart = timeline.timelineStart;
+                    if (m_onChanged)
+                    {
+                        m_onChanged();
+                    }
+                });
+        }
+        catch (...)
+        {
+            LogCurrentException(L"MediaController::RefreshTimeline");
+        }
+    }
+
+    void MediaController::Seek(double seconds) noexcept
+    {
+        try
+        {
+            auto session = CurrentSession();
+            if (!session || !m_state.hasTimeline)
+            {
+                return;
+            }
+            const auto offset = std::chrono::duration_cast<wf::TimeSpan>(std::chrono::duration<double>(std::max(0.0, seconds)));
+            session.TryChangePlaybackPositionAsync((m_state.timelineStart + offset).count());
+
+            // Не ждём подтверждения от плеера: сразу считаем позицию от новой точки.
+            m_state.position = offset;
+            m_state.positionUpdated = winrt::clock::now();
+        }
+        catch (...)
+        {
+            LogCurrentException(L"MediaController::Seek");
+        }
+    }
+
+    void MediaController::CycleRepeat() noexcept
+    {
+        try
+        {
+            using winrt::Windows::Media::MediaPlaybackAutoRepeatMode;
+            if (auto session = CurrentSession())
+            {
+                const auto next = m_state.repeatMode == 0 ? MediaPlaybackAutoRepeatMode::Track
+                    : m_state.repeatMode == 1 ? MediaPlaybackAutoRepeatMode::List
+                    : MediaPlaybackAutoRepeatMode::None;
+                session.TryChangeAutoRepeatModeAsync(next);
+            }
+        }
+        catch (...)
+        {
+            LogCurrentException(L"MediaController::CycleRepeat");
+        }
+    }
+
+    void MediaController::ToggleShuffle() noexcept
+    {
+        try
+        {
+            if (auto session = CurrentSession())
+            {
+                session.TryChangeShuffleActiveAsync(!m_state.shuffle);
+            }
+        }
+        catch (...)
+        {
+            LogCurrentException(L"MediaController::ToggleShuffle");
         }
     }
 
